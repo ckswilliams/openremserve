@@ -1,0 +1,140 @@
+version: '3'
+
+services:
+  nginx:
+    restart: always
+    build: ./nginx
+    volumes:
+      - ./config/nginx.conf:/etc/nginx/conf.d/nginx.conf
+      - static_volume:/var/static
+      - media_volume:/var/media
+    ports:
+      - 8080:8080
+    depends_on:
+      - web
+  web:
+    restart: always
+    build:
+      context: ./openrem
+      dockerfile: Dockerfile
+    expose:
+      - "8000"
+    volumes:
+      - ./openrem/app:/app
+      - img/:/var/img
+      - ./logs/:/var/logs
+      - ./config/local_settings.py:/app/openrem/openremproject/local_settings.py:ro
+      - ./config/wsgi.py:/app/openrem/openremproject/wsgi.py:ro
+      - ./openrem/initialise.sh:/var/dose/initialise.sh
+      - ./openrem/update.sh:/var/dose/update.sh
+      - static_volume:/var/dose/static
+      - media_volume:/var/dose/media
+    tty: true
+    working_dir: /app/openrem
+    command: gunicorn openremproject.wsgi:application --bind 0.0.0.0:8000
+    depends_on:
+     - postgres
+     - orthanc
+     - rabbitmq
+  worker:
+    restart: always
+    build:
+      context: ./openrem
+      dockerfile: Dockerfile
+    volumes:
+      - ./openrem/app:/app
+      - img/:/var/img
+      - ./logs/:/var/logs
+      - ./config/local_settings.py:/app/openrem/openremproject/local_settings.py:ro
+      - ./config/wsgi.py:/app/openrem/openremproject/wsgi.py:ro
+      - static_volume:/var/dose/static
+      - media_volume:/var/dose/media
+    working_dir: /app/openrem/
+    entrypoint: sh -c "celery -A openremproject worker --concurrency=1 --loglevel=info"
+    depends_on:
+     - postgres
+     - orthanc
+     - rabbitmq
+  process_worker:
+    restart: always
+    build:
+      context: ./openrem
+      dockerfile: Dockerfile
+    volumes:
+      - ./openrem/app:/app
+      - img/:/var/img
+      - ./logs/:/var/logs
+      - ./config/local_settings.py:/app/openrem/openremproject/local_settings.py:ro
+      - ./config/wsgi.py:/app/openrem/openremproject/wsgi.py:ro
+      - ./config/process_queue:/app/openrem/process_queue
+      - static_volume:/var/dose/static
+      - media_volume:/var/dose/media
+    working_dir: /app/openrem/process_queue
+    entrypoint: celery -A process_task worker --concurrency=5 --loglevel=info
+    depends_on:
+     - postgres
+     - orthanc
+     - rabbitmq
+  img_monitor:
+    restart: always
+    build:
+      context: ./openrem
+      dockerfile: Dockerfile
+    volumes:
+      - ./openrem/app:/app
+      - img/:/var/img
+      - ./logs/:/var/logs
+      - ./config/local_settings.py:/app/openrem/openremproject/local_settings.py:ro
+      - ./config/wsgi.py:/app/openrem/openremproject/wsgi.py:ro
+      - ./config/process_queue:/app/openrem/process_queue:ro
+      - static_volume:/var/dose/static
+      - media_volume:/var/dose/media
+    working_dir: /app/openrem/process_queue
+    entrypoint: python img_monitor.py
+    depends_on:
+     - postgres
+     - orthanc
+     - rabbitmq
+  postgres:
+    image: postgres:latest
+    restart: always
+    ports:
+      - "5432:5432"
+    volumes:
+     - db:/var/lib/postgresql/data
+     - img:/var/img
+     - ./logs/:/logs
+    environment:
+      POSTGRES_USER: openremuser
+      POSTGRES_DB: openremdb
+      POSTGRES_PASSWORD: nopasswordhere
+  orthanc:
+    image: jodogne/orthanc
+    restart: always
+    ports:
+      - "104:104"
+      - "8042:8042"
+    volumes:
+      - orthanc-db:/var/lib/orthanc/db/
+      - ./config/orthanc.json:/etc/orthanc/orthanc.json:ro
+      - ./config/openrem_orthanc_config.lua:/etc/orthanc/openrem_orthanc_config.lua:ro
+      - img:/img/
+    environment:
+      - NO_PROXY=localhost,127.0.0.1,rabbitmq
+      - no_proxy=localhost,127.0.0.1,rabbitmq
+  rabbitmq:
+    restart: always
+    image: rabbitmq:3-management
+    expose:
+      - "5672"
+      - "15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+
+volumes:
+  db:
+  orthanc-db:
+  img:
+  static_volume:
+  media_volume:

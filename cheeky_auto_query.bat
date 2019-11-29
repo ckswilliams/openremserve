@@ -1,0 +1,1 @@
+docker exec -it openremserve_web_1 python /app/auto_query.py
